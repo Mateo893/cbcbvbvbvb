@@ -37,26 +37,45 @@ except ImportError:
 # ========================================================
 VOZ_JARVIS = "es-ES-AlvaroNeural"  # Tono formal tipo JARVIS
 UMBRAL_VOZ = 1400                 # Umbral seguro contra ventiladores
-MEMORIA_CONVERSACION = []         # Memoria de corto plazo para la charla
-ULTIMA_PRESENTACION = None        # Guarda la última presentación creada
+MEMORIA_CONVERSACION = []         # Memoria de corto plazo
+ULTIMA_PRESENTACION = None        # Guarda última presentación
+ES_MAC = sys.platform == "darwin"
+ES_WINDOWS = sys.platform == "win32"
 
 pygame.mixer.init()
 pygame.mixer.music.set_volume(1.0)
 
 # ========================================================
-# --- OBTENER ESCRITORIO REAL (COMPATIBLE CON ONEDRIVE) ---
+# --- DETECCIÓN UNIVERSAL DE ESCRITORIO (MAC / WINDOWS) ---
 # ========================================================
 def obtener_ruta_escritorio():
-    try:
-        import winreg
-        clave = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders")
-        ruta, _ = winreg.QueryValueEx(clave, "Desktop")
-        return os.path.expandvars(ruta)
-    except Exception:
-        onedrive_desktop = os.path.join(os.path.expanduser("~"), "OneDrive", "Desktop")
-        if os.path.exists(onedrive_desktop):
-            return onedrive_desktop
+    """Detecta el escritorio real en Windows (con OneDrive) o en Mac."""
+    if ES_WINDOWS:
+        try:
+            import winreg
+            clave = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders")
+            ruta, _ = winreg.QueryValueEx(clave, "Desktop")
+            return os.path.expandvars(ruta)
+        except Exception:
+            onedrive_desktop = os.path.join(os.path.expanduser("~"), "OneDrive", "Desktop")
+            if os.path.exists(onedrive_desktop):
+                return onedrive_desktop
+            return os.path.join(os.path.expanduser("~"), "Desktop")
+    else:
+        # En Mac / Linux siempre es ~/Desktop
         return os.path.join(os.path.expanduser("~"), "Desktop")
+
+def abrir_archivo_universal(ruta):
+    """Abre archivos con la app predeterminada en Windows o Mac."""
+    if ES_WINDOWS:
+        try:
+            os.startfile(ruta)
+        except Exception:
+            subprocess.Popen(f'start "" "{ruta}"', shell=True)
+    elif ES_MAC:
+        subprocess.Popen(["open", ruta])
+    else:
+        subprocess.Popen(["xdg-open", ruta])
 
 # ========================================================
 # --- CALIBRACIÓN AUTOMÁTICA DEL MICRÓFONO ---
@@ -87,7 +106,7 @@ def transcribir_audio(audio_np, fs=16000):
             data=flac_data,
             headers={
                 "Content-Type": f"audio/x-flac; rate={fs}",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+                "User-Agent": "Mozilla/5.0"
             }
         )
         with urllib.request.urlopen(req, timeout=12) as response:
@@ -208,10 +227,9 @@ def escuchar_orden(gui=None):
         return ""
 
 # ========================================================
-# --- PARSEADOR ROBUSTO DE CONTENIDO (CERO ERRORES JSON) ---
+# --- PARSEADOR DE POWERPOINT ---
 # ========================================================
 def parsear_presentacion_texto(texto_crudo, tema_solicitado):
-    """Convierte texto estructurado natural en diapositivas sin riesgo de errores de sintaxis."""
     lineas = texto_crudo.strip().split("\n")
     titulo = f"Presentación: {tema_solicitado.title()}"
     subtitulo = "Análisis e información destacada"
@@ -242,46 +260,24 @@ def parsear_presentacion_texto(texto_crudo, tema_solicitado):
     if diapositiva_actual and diapositiva_actual["puntos"]:
         diapositivas.append(diapositiva_actual)
 
-    # Estructura garantizada si la IA devolvió pocas diapositivas
     if len(diapositivas) < 2:
         diapositivas = [
             {
                 "titulo": f"1. Introducción: {tema_solicitado.title()}",
-                "puntos": [
-                    f"Conceptos y fundamentos esenciales sobre {tema_solicitado}.",
-                    "Contexto histórico y marco general.",
-                    "Factores determinantes que explican su relevancia."
-                ],
-                "guion": f"Comenzamos con la introducción sobre {tema_solicitado}, analizando los conceptos básicos."
+                "puntos": [f"Conceptos y fundamentos esenciales sobre {tema_solicitado}.", "Contexto general y relevancia."],
+                "guion": f"Comenzamos con la introducción sobre {tema_solicitado}."
             },
             {
-                "titulo": "2. Desarrollo y Aspectos Clave",
-                "puntos": [
-                    "Análisis detallado de los elementos principales.",
-                    "Características, hitos y datos de mayor impacto.",
-                    "Trascendencia en la sociedad y la cultura."
-                ],
-                "guion": "Avanzando en el tema, exploramos los aspectos más destacados de su desarrollo."
-            },
-            {
-                "titulo": "3. Conclusiones y Legado",
-                "puntos": [
-                    "Síntesis de los puntos más importantes expuestos.",
-                    "Reflexión final sobre su influencia en el presente.",
-                    "Perspectivas y lecciones para el futuro."
-                ],
-                "guion": "Para finalizar esta presentación, sintetizamos los aprendizajes más valiosos."
+                "titulo": "2. Desarrollo Principal",
+                "puntos": ["Análisis de los elementos clave.", "Aspectos destacados y trascendencia."],
+                "guion": "Avanzando en el tema, exploramos los puntos más destacados."
             }
         ]
 
-    return {
-        "titulo": titulo,
-        "subtitulo": subtitulo,
-        "diapositivas": diapositivas
-    }
+    return {"titulo": titulo, "subtitulo": subtitulo, "diapositivas": diapositivas}
 
 # ========================================================
-# --- SUPERPODER POWERPOINT: DISEÑO Y CREACIÓN REAL ---
+# --- SUPERPODER POWERPOINT ---
 # ========================================================
 def crear_presentacion_powerpoint(tema, gui=None):
     global ULTIMA_PRESENTACION
@@ -289,53 +285,45 @@ def crear_presentacion_powerpoint(tema, gui=None):
     if gui:
         gui.cambiar_estado("🎨 DISEÑANDO DIAPOSITIVAS...", "#FFB800")
 
-    # Prompt en texto estructurado natural: rápido, sin atascos y libre de error 500
     prompt_pptx = f"""Eres un experto orador y creador de presentaciones ejecutivas.
 Crea el contenido de 4 diapositivas profesionales sobre el tema: "{tema}".
 
-Responde ÚNICAMENTE con este formato de texto claro (sin código ni corchetes):
+Responde ÚNICAMENTE con este formato de texto:
 
-TITULO: (Título profesional sobre {tema})
-SUBTITULO: (Subtítulo elegante y descriptivo)
+TITULO: (Título sobre {tema})
+SUBTITULO: (Subtítulo elegante)
 
 DIAPOSITIVA: 1. Introducción y Contexto
 - Primer punto clave
 - Segundo punto clave
-- Tercer punto clave
-GUION: Explicación oral de dos oraciones para esta diapositiva.
+GUION: Explicación oral de dos oraciones.
 
 DIAPOSITIVA: 2. Desarrollo y Puntos Principales
 - Primer punto clave
 - Segundo punto clave
-- Tercer punto clave
-GUION: Explicación oral de dos oraciones para esta diapositiva.
+GUION: Explicación oral de dos oraciones.
 
-DIAPOSITIVA: 3. Impacto y Casos Destacados
+DIAPOSITIVA: 3. Impacto y Relevancia
 - Primer punto clave
 - Segundo punto clave
-- Tercer punto clave
-GUION: Explicación oral de dos oraciones para esta diapositiva.
+GUION: Explicación oral de dos oraciones.
 
-DIAPOSITIVA: 4. Conclusiones y Futuro
+DIAPOSITIVA: 4. Conclusiones y Legado
 - Primer punto clave
 - Segundo punto clave
-- Tercer punto clave
-GUION: Explicación oral de cierre para la exposición.
+GUION: Explicación oral de cierre.
 """
 
     try:
-        # Llamada en modo texto nativo a Llama 3.2 (cero probabilidad de repeat limit)
         respuesta = ollama.chat(
             model='llama3.2',
             messages=[{'role': 'user', 'content': prompt_pptx}],
             options={'temperature': 0.7}
         )
-        texto_crudo = respuesta['message']['content'].strip()
-        datos = parsear_presentacion_texto(texto_crudo, tema)
+        datos = parsear_presentacion_texto(respuesta['message']['content'].strip(), tema)
     except Exception as e:
         if gui:
             gui.agregar_log("SISTEMA", f"Aviso de IA: {e}")
-        # En caso extremo, genera la estructura garantizada de respaldo
         datos = parsear_presentacion_texto("", tema)
 
     try:
@@ -359,7 +347,7 @@ GUION: Explicación oral de cierre para la exposición.
 
         p_tit = tf.paragraphs[0]
         p_tit.text = datos.get("titulo", tema.upper())
-        p_tit.font.name = "Segoe UI"
+        p_tit.font.name = "Arial"
         p_tit.font.size = Pt(44)
         p_tit.font.bold = True
         p_tit.font.color.rgb = COLOR_CIAN
@@ -367,19 +355,11 @@ GUION: Explicación oral de cierre para la exposición.
 
         p_sub = tf.add_paragraph()
         p_sub.text = datos.get("subtitulo", "Presentación de Alto Nivel")
-        p_sub.font.name = "Segoe UI"
+        p_sub.font.name = "Arial"
         p_sub.font.size = Pt(20)
         p_sub.font.color.rgb = COLOR_GRIS
         p_sub.space_before = Pt(20)
         p_sub.alignment = PP_ALIGN.CENTER
-
-        p_pie = tf.add_paragraph()
-        p_pie.text = "DISEÑADO Y EXPUESTO POR J.A.R.V.I.S. // STARK INDUSTRIES"
-        p_pie.font.name = "Consolas"
-        p_pie.font.size = Pt(11)
-        p_pie.font.color.rgb = RGBColor(75, 94, 120)
-        p_pie.space_before = Pt(40)
-        p_pie.alignment = PP_ALIGN.CENTER
 
         for d in datos.get("diapositivas", []):
             slide = prs.slides.add_slide(slide_layout)
@@ -390,7 +370,7 @@ GUION: Explicación oral de cierre para la exposición.
             tf_h = box_header.text_frame
             p_h = tf_h.paragraphs[0]
             p_h.text = d.get("titulo", "Punto Clave")
-            p_h.font.name = "Segoe UI"
+            p_h.font.name = "Arial"
             p_h.font.size = Pt(28)
             p_h.font.bold = True
             p_h.font.color.rgb = COLOR_CIAN
@@ -403,7 +383,7 @@ GUION: Explicación oral de cierre para la exposición.
             for idx, punto in enumerate(puntos):
                 p_c = tf_c.paragraphs[0] if idx == 0 else tf_c.add_paragraph()
                 p_c.text = f"•  {punto}"
-                p_c.font.name = "Segoe UI"
+                p_c.font.name = "Arial"
                 p_c.font.size = Pt(20)
                 p_c.font.color.rgb = COLOR_TEXTO
                 p_c.space_after = Pt(22)
@@ -414,102 +394,73 @@ GUION: Explicación oral de cierre para la exposición.
         ruta_completa = os.path.join(escritorio, nombre_archivo)
         prs.save(ruta_completa)
 
-        ULTIMA_PRESENTACION = {
-            "ruta": ruta_completa,
-            "datos": datos
-        }
-
+        ULTIMA_PRESENTACION = {"ruta": ruta_completa, "datos": datos}
         if gui:
             gui.agregar_log("SISTEMA", f"📊 Presentación guardada en:\n{ruta_completa}")
 
-        try:
-            os.startfile(ruta_completa)
-        except Exception:
-            subprocess.Popen(f'start "" "{ruta_completa}"', shell=True)
-
+        abrir_archivo_universal(ruta_completa)
         return ULTIMA_PRESENTACION
 
     except Exception as e:
         if gui:
-            gui.agregar_log("SISTEMA", f"Error creando archivo PowerPoint: {e}")
+            gui.agregar_log("SISTEMA", f"Error creando PowerPoint: {e}")
         hablar("Ocurrió un error al compilar el archivo de diapositivas, señor.", gui)
         return None
 
-# ========================================================
-# --- MODO EXPOSITOR ---
-# ========================================================
 def realizar_exposicion(gui=None):
     global ULTIMA_PRESENTACION
     if not ULTIMA_PRESENTACION:
-        hablar("No tengo ninguna presentación en memoria para exponer, señor. Primero pídame que le cree una.", gui)
+        hablar("No tengo ninguna presentación en memoria para exponer, señor.", gui)
         return
 
     datos = ULTIMA_PRESENTACION["datos"]
     diapositivas = datos.get("diapositivas", [])
 
-    hablar(f"Iniciando la exposición sobre: {datos.get('titulo', 'el tema')}. Por favor tomen asiento.", gui)
+    hablar(f"Iniciando la exposición sobre: {datos.get('titulo', 'el tema')}.", gui)
     time.sleep(1.0)
 
     for i, d in enumerate(diapositivas, 1):
         titulo = d.get("titulo", f"Diapositiva {i}")
         guion = d.get("guion", "")
-
-        ps_focus = """powershell -NoProfile -Command "(New-Object -ComObject WScript.Shell).AppActivate('PowerPoint')" """
-        subprocess.run(ps_focus, shell=True, capture_output=True)
         pyautogui.press('right')
         time.sleep(0.5)
-
         hablar(f"{titulo}. {guion}", gui)
         time.sleep(0.8)
 
-    hablar("Con esto concluye la exposición de hoy, señor. Quedo atento a las preguntas de la audiencia.", gui)
+    hablar("Con esto concluye la exposición de hoy, señor.", gui)
 
 # ========================================================
-# --- SUPERPODER SPOTIFY ---
+# --- SUPERPODER SPOTIFY Y WHATSAPP ---
 # ========================================================
 def reproducir_en_spotify(busqueda):
-    os.system('start spotify:')
+    if ES_WINDOWS:
+        os.system('start spotify:')
+    elif ES_MAC:
+        os.system('open -a Spotify')
     time.sleep(1.2)
-    ps_focus = """powershell -NoProfile -Command "(New-Object -ComObject WScript.Shell).AppActivate('Spotify')" """
-    subprocess.run(ps_focus, shell=True, capture_output=True)
-    time.sleep(0.4)
-    pyautogui.hotkey('ctrl', 'k')
+    
+    # Atajo Ctrl+K en Windows o Cmd+K en Mac
+    modificador = 'command' if ES_MAC else 'ctrl'
+    pyautogui.hotkey(modificador, 'k')
     time.sleep(0.4)
     pyperclip.copy(busqueda)
-    pyautogui.hotkey('ctrl', 'v')
+    pyautogui.hotkey(modificador, 'v')
     time.sleep(0.7)
     pyautogui.press('enter')
 
-# ========================================================
-# --- SUPERPODER WHATSAPP WEB ---
-# ========================================================
 def enfocar_whatsapp_web():
-    ps_cmd = """powershell -NoProfile -Command "
-    $w = Get-Process | Where-Object { $_.MainWindowTitle -like '*WhatsApp*' } | Select-Object -First 1;
-    if ($w) {
-        (New-Object -ComObject WScript.Shell).AppActivate($w.Id)
-        exit 0
-    } else {
-        exit 1
-    }
-    " """
-    res = subprocess.run(ps_cmd, shell=True, capture_output=True)
-    if res.returncode != 0:
-        webbrowser.open("https://web.whatsapp.com")
-        time.sleep(4.5)
-    else:
-        time.sleep(0.6)
+    webbrowser.open("https://web.whatsapp.com")
+    time.sleep(3.0)
 
 def buscar_chat_whatsapp_web(contacto):
     enfocar_whatsapp_web()
     pyautogui.press('esc')
     time.sleep(0.2)
-    pyautogui.press('esc')
-    time.sleep(0.2)
-    pyautogui.hotkey('ctrl', 'alt', 'n')
+    mod = 'command' if ES_MAC else 'ctrl'
+    pyautogui.hotkey(mod, 'alt', 'n')
     time.sleep(0.8)
     pyperclip.copy(contacto)
-    pyautogui.hotkey('ctrl', 'v')
+    pyautogui.hotkey(mod, 'v')
     time.sleep(1.2)
     pyautogui.press('enter')
     time.sleep(0.8)
@@ -517,77 +468,55 @@ def buscar_chat_whatsapp_web(contacto):
 def enviar_mensaje_whatsapp_web(contacto, mensaje):
     buscar_chat_whatsapp_web(contacto)
     pyperclip.copy(mensaje)
-    pyautogui.hotkey('ctrl', 'v')
+    mod = 'command' if ES_MAC else 'ctrl'
+    pyautogui.hotkey(mod, 'v')
     time.sleep(0.4)
     pyautogui.press('enter')
 
 # ========================================================
-# --- NÚCLEO DE CONTROL TOTAL (POWERSHELL SANITIZADO) ---
+# --- CONTROL DE SISTEMA UNIVERSAL (WINDOWS Y MAC) ---
 # ========================================================
-def ejecutar_en_sistema(comando_ps, gui=None):
-    prohibidos = ["format ", "rmdir /s /q c:", "del /f /s /q c:", "remove-item -recurse -force c:\\windows"]
-    for p in prohibidos:
-        if p in comando_ps.lower():
-            if gui:
-                gui.agregar_log("SISTEMA", "⚠️ Comando bloqueado por seguridad del sistema operativo.")
-            return False, "Comando bloqueado por seguridad."
+def ejecutar_en_sistema(comando, gui=None):
+    """Ejecuta en PowerShell (Windows) o en Bash/Zsh (Mac)."""
+    if gui:
+        gui.agregar_log("SISTEMA", f"⚙️ Ejecutando orden:\n{comando}")
 
-    comando_limpio = re.sub(r'"{2,}', '"', comando_ps)
-    comando_limpio = re.sub(r"'{2,}", "'", comando_limpio)
-
-    for var in ["$Escritorio", "$Documentos", "$Descargas", "$env:"]:
-        comando_limpio = comando_limpio.replace(f"'{var}", f'"{var}')
-
-    script_ps = f"""
+    try:
+        if ES_WINDOWS:
+            script_ps = f"""
 $Escritorio = [Environment]::GetFolderPath('Desktop')
 $Documentos = [Environment]::GetFolderPath('MyDocuments')
 $Descargas  = Join-Path $env:USERPROFILE 'Downloads'
-{comando_limpio}
+{comando}
 """
-    if gui:
-        gui.agregar_log("SISTEMA", f"⚙️ Ejecutando en Windows:\n{comando_limpio}")
+            res = subprocess.run(["powershell", "-NoProfile", "-Command", script_ps], capture_output=True, text=True, timeout=20)
+        else:
+            # En Mac ejecuta en la terminal Zsh nativa
+            res = subprocess.run(comando, shell=True, executable="/bin/zsh", capture_output=True, text=True, timeout=20)
 
-    try:
-        resultado = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script_ps],
-            capture_output=True,
-            text=True,
-            timeout=25
-        )
-        salida = resultado.stdout.strip()
-        error = resultado.stderr.strip()
-
-        if resultado.returncode != 0 or (error and "warning" not in error.lower()):
-            if gui and error:
-                gui.agregar_log("SISTEMA", f"Aviso de PowerShell: {error[:250]}")
+        salida = res.stdout.strip()
+        error = res.stderr.strip()
+        if res.returncode != 0 and error:
             return False, error
-
         return True, salida
-    except subprocess.TimeoutExpired:
-        return False, "La operación tardó demasiado tiempo."
     except Exception as e:
         return False, str(e)
 
 # ========================================================
-# --- CEREBRO AGENTE CON CONTROL TOTAL ---
+# --- CEREBRO AGENTE DE CONTROL TOTAL ---
 # ========================================================
 def razonar_y_ejecutar(orden, gui):
     global MEMORIA_CONVERSACION
-    gui.cambiar_estado("🧠 PENSANDO Y CALCULANDO...", "#FFB800")
+    gui.cambiar_estado("🧠 PENSANDO...", "#FFB800")
 
-    prompt_sistema = """Eres JARVIS, el sistema de IA con CONTROL TOTAL de la computadora con Windows del usuario.
-Tu misión es mantener una conversación natural fluida con el usuario y/o ejecutar comandos de PowerShell si pide alguna acción en la PC.
-
-DEBES responder OBLIGATORIAMENTE en formato JSON puro con estos campos:
-{
-    "voz": "Frase breve y formal en español dirigiéndote siempre como 'señor'. Responde con naturalidad manteniendo el hilo de lo que venían hablando.",
-    "comando": "Comando de PowerShell exacto si pide hacer algo en la PC. Si no requiere comando, pon null.",
-    "crear_presentacion": "Si el usuario pide crear o mostrar diapositivas sobre algún tema, escribe aquí SOLAMENTE el nombre del tema (ejemplo: 'Inglaterra'). Si no pide diapositivas, pon null."
-}
-
-REGLAS:
-1. En Windows NO existe el comando 'powerpoint new'. Para diapositivas usa EXCLUSIVAMENTE 'crear_presentacion'.
-2. Usa comillas dobles normales (\") para rutas de PowerShell."""
+    sistema_op = "macOS" if ES_MAC else "Windows"
+    prompt_sistema = f"""Eres JARVIS, el sistema de IA con CONTROL TOTAL de la computadora ({sistema_op}) del usuario.
+Responde en formato JSON puro:
+{{
+    "voz": "Frase breve y formal en español llamando 'señor' al usuario.",
+    "comando": "Comando de terminal para {sistema_op} si pide alguna acción en el equipo (o null si es solo charla).",
+    "crear_presentacion": "Tema para diapositivas si el usuario lo pidió (o null si no pidió diapositivas)."
+}}"""
 
     try:
         mensajes = [{'role': 'system', 'content': prompt_sistema}]
@@ -604,7 +533,7 @@ REGLAS:
         
         datos = json.loads(response['message']['content'])
         voz_jarvis = datos.get("voz", "A su servicio, señor.")
-        comando_ps = datos.get("comando", None)
+        comando_sys = datos.get("comando", None)
         tema_pptx = datos.get("crear_presentacion", None)
 
         if tema_pptx and str(tema_pptx).strip().lower() not in ["null", "none", "", "false"]:
@@ -613,44 +542,31 @@ REGLAS:
                 hablar(f"He diseñado y abierto la presentación sobre {tema_pptx} en su pantalla, señor.", gui)
                 return
 
-        if comando_ps and any(w in str(comando_ps).lower() for w in ["powerpoint new", "powerpnt new", "new-powerpoint"]):
-            tema_limpio = orden.replace("haz", "").replace("crea", "").replace("diapositiva", "").replace("power point", "").replace("powerpoint", "").replace("en", "").replace("de", "").strip()
-            pres = crear_presentacion_powerpoint(tema_limpio or "Presentación", gui)
-            if pres:
-                hablar(f"He diseñado y abierto la presentación en su pantalla, señor.", gui)
-                return
-
-        if comando_ps and str(comando_ps).strip().lower() not in ["null", "none", "", "false"]:
-            exito, salida = ejecutar_en_sistema(str(comando_ps).strip(), gui)
+        if comando_sys and str(comando_sys).strip().lower() not in ["null", "none", "", "false"]:
+            exito, salida = ejecutar_en_sistema(str(comando_sys).strip(), gui)
             if not exito:
-                hablar("Disculpe señor, no pude completar la acción en Windows debido a un error de sistema.", gui)
+                hablar("Disculpe señor, no pude completar la acción en el sistema.", gui)
                 return
-            if salida and any(w in orden for w in ["cuánto", "cuanta", "dime", "cuál", "cual", "muestra", "ip", "ram", "memoria"]):
-                voz_jarvis += f" El resultado es: {salida[:80]}."
 
         MEMORIA_CONVERSACION.append({'role': 'user', 'content': orden})
         MEMORIA_CONVERSACION.append({'role': 'assistant', 'content': voz_jarvis})
-        if len(MEMORIA_CONVERSACION) > 10:
-            MEMORIA_CONVERSACION = MEMORIA_CONVERSACION[-8:]
-
         hablar(voz_jarvis, gui)
 
     except Exception as e:
-        gui.agregar_log("SISTEMA", f"Error en cerebro de agente: {e}")
-        hablar("Disculpe señor, ocurrió una interferencia en mis subrutinas de procesamiento.", gui)
+        gui.agregar_log("SISTEMA", f"Error en cerebro: {e}")
+        hablar("Disculpe señor, ocurrió una interferencia en mis subrutinas.", gui)
 
 # ========================================================
-# --- PROCESADOR DE ACCIONES INMEDIATAS ---
+# --- PROCESADOR DE ACCIONES ---
 # ========================================================
 def procesar_comandos(orden, gui):
     orden = orden.replace(",", "").replace(".", "").strip()
-    
     for pref in ["oye jarvis ", "hey jarvis ", "ok jarvis ", "jarvis ", "yarbis ", "yarbiss ", "yarvis "]:
         if orden.startswith(pref):
             orden = orden[len(pref):].strip()
             break
 
-    # 1. SUPERPODER POWERPOINT
+    # PowerPoint
     es_pedido_pptx = any(w in orden for w in ["diapositiva", "diapositivas", "presentacion", "presentación", "powerpoint", "power point"])
     es_accion_crear = any(v in orden for v in ["haz", "crea", "prepara", "arma", "muestra", "muéstrame", "dame", "saca"])
 
@@ -658,21 +574,15 @@ def procesar_comandos(orden, gui):
         tema = orden
         for v in ["hazme ", "créame ", "preparame ", "haz ", "crea ", "prepara ", "arma ", "muéstrame ", "muestra ", "dame "]:
             tema = tema.replace(v, " ")
-        for ref in [
-            "en power point", "en powerpoint", "de power point", "con powerpoint", "powerpoint", "power point",
-            "unas diapositivas", "una diapositiva", "diapositivas", "diapositiva",
-            "una presentación", "una presentacion", "la presentación", "la presentacion", "presentación", "presentacion"
-        ]:
+        for ref in ["en power point", "en powerpoint", "powerpoint", "power point", "unas diapositivas", "una diapositiva", "diapositivas", "diapositiva", "una presentación", "presentación", "presentacion"]:
             tema = tema.replace(ref, " ")
 
-        exponer_de_una = False
-        for exp in [" y haz la exposición", " y haz la exposicion", " y exponla", " y presenta", " y expón", " y expon"]:
-            if exp in tema:
-                tema = tema.replace(exp, "").strip()
-                exponer_de_una = True
+        exponer_de_una = any(exp in tema for exp in [" y haz la exposición", " y exponla", " y presenta", " y expón"])
+        for exp in [" y haz la exposición", " y exponla", " y presenta", " y expón"]:
+            tema = tema.replace(exp, "").strip()
 
         tema = re.sub(r'\s+', ' ', tema).strip()
-        for con in ["acerca de ", "sobre ", "de la vida de ", "de la vida con ", "de la vida en ", "de la ", "del ", "de "]:
+        for con in ["acerca de ", "sobre ", "de la vida de ", "de la ", "del ", "de "]:
             if tema.startswith(con):
                 tema = tema[len(con):].strip()
                 break
@@ -683,35 +593,24 @@ def procesar_comandos(orden, gui):
                 if exponer_de_una:
                     realizar_exposicion(gui)
                 else:
-                    hablar(f"He diseñado y abierto la presentación sobre {tema} en su pantalla, señor. Si desea que la exponga, solo dígame: 'Jarvis, haz la exposición'.", gui)
+                    hablar(f"He diseñado y abierto la presentación sobre {tema} en su pantalla, señor.", gui)
             return True
 
-    if any(frase in orden for frase in ["haz la exposición", "haz la exposicion", "inicia la exposición", "expón las diapositivas", "expón la presentación"]):
+    if any(f in orden for f in ["haz la exposición", "expón las diapositivas", "expón la presentación"]):
         realizar_exposicion(gui)
         return True
 
-    # 2. Minimizar Jarvis
+    # Minimizar
     if any(f in orden for f in ["minimízate", "minimizate", "minimiza", "ocúltate", "ocultate"]):
         hablar("Ocultando interfaz, señor. Seguiré atento en segundo plano.", gui)
         gui.minimizar()
         return True
 
-    # 3. WhatsApp Web
+    # WhatsApp
     if any(frase in orden for frase in ["abre whatsapp", "abrir whatsapp", "abre whatsapp web"]):
-        hablar("Abriendo WhatsApp Web en su navegador, señor.", gui)
+        hablar("Abriendo WhatsApp Web, señor.", gui)
         enfocar_whatsapp_web()
         return True
-
-    for act in ["llama a ", "llamar a ", "llámale a "]:
-        if act in orden:
-            contacto = orden.split(act, 1)[1].replace(" por whatsapp", "").strip()
-            for rel in ["mi ", "al ", "a "]:
-                if contacto.startswith(rel):
-                    contacto = contacto[len(rel):].strip()
-            hablar(f"Abriendo conversación con {contacto} en WhatsApp Web, señor.", gui)
-            buscar_chat_whatsapp_web(contacto)
-            hablar("Pantalla lista. Presione el botón de llamada para iniciarla.", gui)
-            return True
 
     activadores_msg = ["mándale un mensaje a ", "mandale un mensaje a ", "envíale un mensaje a ", "manda un mensaje a ", "envía un mensaje a "]
     for act in activadores_msg:
@@ -726,7 +625,6 @@ def procesar_comandos(orden, gui):
                     break
             if not contacto:
                 contacto = resto.strip()
-
             for rel in ["mi ", "al ", "a "]:
                 if contacto.startswith(rel):
                     contacto = contacto[len(rel):].strip()
@@ -736,14 +634,13 @@ def procesar_comandos(orden, gui):
                     hablar(f"¿Qué mensaje desea enviarle a {contacto}, señor?", gui)
                     mensaje = escuchar_orden(gui)
                     if not mensaje:
-                        hablar("No detecté mensaje, operación cancelada, señor.", gui)
+                        hablar("Operación cancelada, señor.", gui)
                         return True
-
-                hablar(f"Enviando mensaje a {contacto} por WhatsApp Web, señor.", gui)
+                hablar(f"Enviando mensaje a {contacto}, señor.", gui)
                 enviar_mensaje_whatsapp_web(contacto, mensaje)
                 return True
 
-    # 4. Spotify
+    # Spotify
     if "spotify" in orden:
         termino = orden.replace("en la app de spotify", "").replace("en spotify", "").replace("spotify", "").strip()
         for p in ["pon la canción de", "pon una canción de", "pon música de", "reproduce a", "reproduce", "pon"]:
@@ -758,7 +655,7 @@ def procesar_comandos(orden, gui):
         reproducir_en_spotify(termino)
         return True
 
-    # 5. Controles Multimedia
+    # Controles Multimedia
     if any(frase in orden for frase in ["pausa la música", "pausar la música", "reanuda la música"]):
         pyautogui.press('playpause')
         hablar("Música en pausa o reanudada, señor.", gui)
@@ -769,19 +666,6 @@ def procesar_comandos(orden, gui):
         hablar("Siguiente canción, señor.", gui)
         return True
 
-    if "sube el volumen" in orden or "subir volumen" in orden:
-        for _ in range(5):
-            pyautogui.press('volumeup')
-        hablar("Subiendo volumen, señor.", gui)
-        return True
-
-    if "baja el volumen" in orden or "bajar volumen" in orden:
-        for _ in range(5):
-            pyautogui.press('volumedown')
-        hablar("Bajando volumen, señor.", gui)
-        return True
-
-    # 6. Hora y Fecha
     if "hora" in orden:
         hablar(f"Son las {datetime.datetime.now().strftime('%I:%M %p')}, señor.", gui)
         return True
@@ -796,18 +680,16 @@ def procesar_comandos(orden, gui):
     return False
 
 # ========================================================
-# --- INTERFAZ GRÁFICA STARK (ANTI-COLAPSO DE VENTANA) ---
+# --- INTERFAZ GRÁFICA STARK ---
 # ========================================================
 class JarvisGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("J.A.R.V.I.S. - Sistema de Control y Presentaciones")
-        
         self.root.geometry("540x680")
         self.root.minsize(540, 680)
         self.root.maxsize(540, 680)
         self.root.configure(bg="#0B0E14")
-
         self.root.bind("<Map>", self._al_restaurar_ventana)
 
         self.ocupado = True
@@ -816,7 +698,7 @@ class JarvisGUI:
         lbl_titulo = tk.Label(root, text="J . A . R . V . I . S", font=("Consolas", 20, "bold"), fg="#00E5FF", bg="#0B0E14")
         lbl_titulo.pack(pady=(18, 5))
 
-        lbl_sub = tk.Label(root, text="DISEÑO Y EXPOSICIÓN POWERPOINT // CONTROL DE WINDOWS", font=("Consolas", 8), fg="#4B5E78", bg="#0B0E14")
+        lbl_sub = tk.Label(root, text="SISTEMA UNIVERSAL (WINDOWS & MACOS)", font=("Consolas", 8), fg="#4B5E78", bg="#0B0E14")
         lbl_sub.pack(pady=(0, 10))
 
         self.canvas = tk.Canvas(root, width=150, height=150, bg="#0B0E14", highlightthickness=0)
@@ -868,9 +750,9 @@ class JarvisGUI:
         global UMBRAL_VOZ
         time.sleep(0.4)
         UMBRAL_VOZ = calibrar_umbral()
-        self.agregar_log("SISTEMA", f"Micrófono calibrado (Filtro anti-ruido: {UMBRAL_VOZ}).")
+        self.agregar_log("SISTEMA", f"Micrófono calibrado (Filtro: {UMBRAL_VOZ}).")
 
-        hablar("Sistemas de control total y presentaciones en línea. A su servicio, señor.", self)
+        hablar("Sistemas universales en línea. A su servicio, señor.", self)
 
         self.ocupado = False
         self.cambiar_estado("🟢 MANOS LIBRES ACTIVO // DI 'JARVIS'", "#00E5FF")
