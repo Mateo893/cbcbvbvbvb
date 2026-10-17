@@ -1,0 +1,9 @@
+sounddevice
+numpy
+soundfile
+edge-tts
+pygame-ce
+ollama
+pyautogui
+pyperclip
+python-pptx
